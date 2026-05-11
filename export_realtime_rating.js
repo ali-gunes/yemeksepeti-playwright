@@ -13,7 +13,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Configuration from .env
-const REPORT_URL = process.env.REPORT_URL;
+const REPORT_URLS = (process.env.REPORT_URLS || "").split(',').map(url => url.trim());
 const USER_DATA_DIR = path.join(__dirname, process.env.AUTH_STATE_DIR || 'auth_state');
 const DOWNLOAD_DIR = path.join(__dirname, process.env.DOWNLOAD_DIR || 'downloads');
 const EMAIL = process.env.GOOGLE_EMAIL;
@@ -31,14 +31,108 @@ const randomDelay = (min = 500, max = 2000) =>
     new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * (max - min + 1) + min)));
 
 /**
- * Real-Time Rating tablosunu CSV (Excel) formatında dışa aktarır.
- * @param {boolean} headless - Tarayıcının görünür olup olmayacağı.
+ * Tek bir Looker Studio sayfasını dışa aktarır.
  */
-async function exportRealtimeRatingCsv(headless = false) {
+async function exportSinglePage(page, url) {
+    console.log(`\n[i] İşleniyor: ${url}`);
+    
+    try {
+        // 1) Sayfaya git
+        await page.goto(url, { waitUntil: 'domcontentloaded' });
+        await randomDelay(2000, 4000);
+
+        // Eğer Google login ekranı çıkarsa otomatik giriş yapmayı dene
+        if (page.url().includes("accounts.google.com")) {
+            console.log("[i] Google girişi gerekli. Otomatik giriş yapılıyor...");
+            
+            try {
+                await page.locator('input[type="email"]').pressSequentially(EMAIL, { delay: 100 });
+                await randomDelay(800, 1500);
+                await page.click('#identifierNext');
+                
+                await page.waitForSelector('input[type="password"]', { state: 'visible', timeout: 30000 });
+                await randomDelay(1000, 2000);
+                
+                await page.locator('input[type="password"]').pressSequentially(PASSWORD, { delay: 100 });
+                await randomDelay(800, 1500);
+                await page.click('#passwordNext');
+                
+                console.log("[i] Giriş bilgileri gönderildi. Yönlendirme bekleniyor...");
+            } catch (loginError) {
+                console.log("[!] Otomatik giriş hatası (manuel müdahale gerekebilir): " + loginError.message);
+            }
+
+            await page.waitForURL("**/datastudio.google.com/**", { timeout: 300000 });
+            // Giriş sonrası sayfanın tam yüklenmesi için tekrar bekle
+            await page.goto(url, { waitUntil: 'domcontentloaded' });
+        }
+
+        // 2) Tablonun yüklenmesini bekle
+        console.log("[i] Tablonun yüklenmesi bekleniyor...");
+        // Sayfada hem Vendor Name hem de pandora_vendor_name_area olabilir, herhangi birini bekleyelim
+        await expect(page.getByText(/pandora_vendor_name_area|Vendor Name|Satıcı Adı/i).first()).toBeVisible({ timeout: 60000 });
+        await randomDelay(2000, 4000);
+
+        // 3) Tabloya sağ tıkla
+        console.log("[i] Tabloya sağ tıklanıyor...");
+        // .last() kullanarak sayfanın üstündeki grafikler yerine alttaki tabloyu hedefliyoruz
+        const tableCell = page.getByText(/pandora_vendor_name_area|Vendor Name|Arby's/i).last();
+        await tableCell.scrollIntoViewIfNeeded();
+        await randomDelay(1000, 2000);
+        
+        await tableCell.click();
+        await randomDelay(500, 1000);
+        await tableCell.click({ button: 'right' });
+
+        // 4) Menüden dışa aktarma adımları
+        await randomDelay(1500, 2500);
+        console.log("[i] 'Export Chart / Grafiği dışa aktar' menüsüne tıklanıyor...");
+        await page.getByText(/Grafiği dışa aktar|Export chart|Export graph/i).first().click();
+
+        await randomDelay(1000, 2000);
+        console.log("[i] 'Export data / Verileri dışa aktar' seçeneğine tıklanıyor...");
+        await page.getByText(/Verileri dışa aktar|Export data/i).first().click();
+
+        await randomDelay(1000, 2000);
+        console.log("[i] 'CSV (Excel)' seçeneği işaretleniyor...");
+        await page.getByText(/CSV \(Excel\)/i).first().click();
+
+        // 5) İndirmeyi başlat ve yakala
+        await randomDelay(1000, 2000);
+        console.log("[i] 'Export / Dışa aktar' butonuna tıklanıyor ve indirme bekleniyor...");
+        const downloadPromise = page.waitForEvent('download', { timeout: 120000 });
+        await page.getByRole('button', { name: /Dışa aktar|Export/i }).click();
+
+        const download = await downloadPromise;
+        const datePrefix = new Date().toISOString().split('T')[0];
+        const suggestedName = download.suggestedFilename() || "export.csv";
+        const finalName = `${datePrefix}_${suggestedName}`;
+        
+        const targetPath = path.join(DOWNLOAD_DIR, finalName);
+        await download.saveAs(targetPath);
+        
+        console.log(`[✓] Başarıyla indirildi: ${finalName}`);
+        return targetPath;
+
+    } catch (error) {
+        console.error(`[!] ${url} işlenirken hata oluştu: ${error.message}`);
+    }
+}
+
+/**
+ * Tüm raporları sırayla dışa aktarır.
+ */
+async function exportAllReports(headless = false) {
     if (!fs.existsSync(USER_DATA_DIR)) fs.mkdirSync(USER_DATA_DIR, { recursive: true });
     if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
 
-    console.log("[i] Tarayıcı başlatılıyor (Stealth mode aktif)...");
+    if (REPORT_URLS.length === 0 || !REPORT_URLS[0]) {
+        console.error("[!] Hata: .env dosyasında REPORT_URLS tanımlanmamış.");
+        return;
+    }
+
+    console.log(`[i] Toplam ${REPORT_URLS.length} rapor işlenecek.`);
+    
     const context = await chromium.launchPersistentContext(USER_DATA_DIR, {
         headless: headless,
         slowMo: SLOW_MO,
@@ -56,105 +150,17 @@ async function exportRealtimeRatingCsv(headless = false) {
     page.setDefaultTimeout(TIMEOUT);
 
     try {
-        // 1) Rapora git
-        console.log("[i] Rapora gidiliyor...");
-        await page.goto(REPORT_URL, { waitUntil: 'domcontentloaded' });
-        await randomDelay(2000, 4000);
-
-        // Eğer Google login ekranı çıkarsa otomatik giriş yapmayı dene
-        if (page.url().includes("accounts.google.com")) {
-            console.log("[i] Google girişi gerekli. Otomatik giriş yapılıyor...");
-            
-            try {
-                // Email girişi (yavaş yazım simülasyonu)
-                await page.locator('input[type="email"]').pressSequentially(EMAIL, { delay: 100 });
-                await randomDelay(800, 1500);
-                await page.click('#identifierNext');
-                
-                // Şifre alanının görünmesini bekle
-                await page.waitForSelector('input[type="password"]', { state: 'visible', timeout: 30000 });
-                await randomDelay(1000, 2000);
-                
-                // Şifre girişi
-                await page.locator('input[type="password"]').pressSequentially(PASSWORD, { delay: 100 });
-                await randomDelay(800, 1500);
-                await page.click('#passwordNext');
-                
-                console.log("[i] Giriş bilgileri gönderildi. Yönlendirme bekleniyor...");
-            } catch (loginError) {
-                console.log("[!] Otomatik giriş sırasında hata oluştu veya manuel müdahale gerekiyor: " + loginError.message);
-                console.log("[i] Lütfen tarayıcıda manuel giriş yapın...");
-            }
-
-            // Raporun yüklenmesini bekle
-            await page.waitForURL("**/datastudio.google.com/**", { timeout: 300000 });
+        for (const url of REPORT_URLS) {
+            await exportSinglePage(page, url);
         }
-
-        // 2) Real-Time Rating sekmesine geç
-        try {
-            await randomDelay(2000, 3000);
-            await page.getByText("Real-Time Rating", { exact: true }).first().click({ timeout: 10000 });
-        } catch (e) {
-            // Zaten sayfada olabiliriz
-        }
-
-        // 3) Tablonun yüklenmesini bekle
-        console.log("[i] Tablonun yüklenmesi bekleniyor...");
-        await expect(page.getByText(/Vendor Name|Satıcı Adı/i).first()).toBeVisible({ timeout: 60000 });
-        await randomDelay(2000, 4000);
-
-        // 4) Tablonun ortasına sağ tıkla
-        console.log("[i] Tabloya sağ tıklanıyor...");
-        const tableCell = page.getByText("Arby's").first();
-        await tableCell.scrollIntoViewIfNeeded();
-        await randomDelay(1000, 2000);
-        
-        await tableCell.click();
-        await randomDelay(500, 1000);
-        await tableCell.click({ button: 'right' });
-        console.log("[i] Sağ tık yapıldı, menü bekleniyor...");
-
-        // 5) "Grafiği dışa aktar..." menüsüne tıkla
-        await randomDelay(1500, 2500);
-        console.log("[i] 'Export Chart / Grafiği dışa aktar' menüsüne tıklanıyor...");
-        await page.getByText(/Grafiği dışa aktar|Export chart|Export graph/i).first().click();
-
-        // 6) Alt menüden "Verileri dışa aktar" seçeneğine tıkla
-        await randomDelay(1000, 2000);
-        console.log("[i] 'Export data / Verileri dışa aktar' seçeneğine tıklanıyor...");
-        await page.getByText(/Verileri dışa aktar|Export data/i).first().click();
-
-        // 7) Açılan diyalogda "CSV (Excel)" seçeneğini işaretle
-        await randomDelay(1000, 2000);
-        console.log("[i] 'CSV (Excel)' seçeneği işaretleniyor...");
-        await page.getByText(/CSV \(Excel\)/i).first().click();
-
-        // 8) "Dışa aktar" butonuna tıkla ve indirmeyi yakala
-        await randomDelay(1000, 2000);
-        console.log("[i] 'Export / Dışa aktar' butonuna tıklanıyor ve indirme bekleniyor...");
-        const downloadPromise = page.waitForEvent('download', { timeout: 120000 });
-        await page.getByRole('button', { name: /Dışa aktar|Export/i }).click();
-
-        const download = await downloadPromise;
-        const datePrefix = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
-        const suggestedName = download.suggestedFilename() || "real_time_rating.csv";
-        const finalName = `${datePrefix}_${suggestedName}`;
-        
-        const targetPath = path.join(DOWNLOAD_DIR, finalName);
-        await download.saveAs(targetPath);
-        
-        console.log(`[✓] İndirilen dosya: ${targetPath}`);
-        return targetPath;
-    } catch (error) {
-        console.error(`[!] Hata oluştu: ${error.message}`);
-        throw error;
     } finally {
         await context.close();
+        console.log("\n[✓] Tüm işlemler tamamlandı.");
     }
 }
 
 // .env dosyasındaki HEADLESS değerine göre başlatır
-exportRealtimeRatingCsv(IS_HEADLESS).catch((err) => {
+exportAllReports(IS_HEADLESS).catch((err) => {
     console.error("Script durduruldu.");
     process.exit(1);
 });
