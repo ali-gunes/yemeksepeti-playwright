@@ -1,6 +1,6 @@
 import { chromium } from 'playwright-extra';
 import stealthPlugin from 'puppeteer-extra-plugin-stealth';
-import { expect } from '@playwright/test';
+import { expect, devices } from '@playwright/test';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
@@ -21,6 +21,9 @@ const PASSWORD = process.env.GOOGLE_PASSWORD;
 const IS_HEADLESS = process.env.HEADLESS === 'true';
 const SLOW_MO = parseInt(process.env.SLOW_MO) || 0;
 const TIMEOUT = parseInt(process.env.DEFAULT_TIMEOUT) || 60000;
+const USE_MOBILE = process.env.USE_MOBILE === 'true';
+const NEUTRAL_LOGIN_URL = process.env.NEUTRAL_LOGIN_URL || "https://accounts.google.com/";
+
 const VIEWPORT = { 
     width: parseInt(process.env.VIEWPORT_WIDTH) || 1568, 
     height: parseInt(process.env.VIEWPORT_HEIGHT) || 900 
@@ -50,16 +53,36 @@ async function humanClick(page, locator) {
 }
 
 /**
- * Google'a en güvenli şekilde (Ana sayfa üzerinden) giriş yapar.
+ * Google'a en güvenli şekilde (Side-door/Neutral sayfa üzerinden) giriş yapar.
  */
 async function ensureGoogleLogin(page) {
-    console.log("[i] Giriş durumu kontrol ediliyor (Ana Google sayfası)...");
-    await page.goto("https://accounts.google.com/", { waitUntil: 'networkidle' });
+    console.log(`[i] Giriş durumu kontrol ediliyor (Hedef: ${NEUTRAL_LOGIN_URL})...`);
+    await page.goto(NEUTRAL_LOGIN_URL, { waitUntil: 'networkidle' });
     await randomDelay(1000, 2000);
+
+    // Giriş butonunu bul ve tıkla (Eğer sayfada varsa)
+    const loginSelectors = [
+        'a[href*="ServiceLogin"]', 
+        'a:has-text("Sign in")', 
+        'a:has-text("Oturum aç")',
+        '#gb_70'
+    ];
+
+    for (const selector of loginSelectors) {
+        try {
+            const btn = page.locator(selector).first();
+            if (await btn.isVisible()) {
+                console.log("[i] Giriş butonu bulundu, tıklanıyor...");
+                await humanClick(page, btn);
+                await page.waitForNavigation();
+                break;
+            }
+        } catch (e) {}
+    }
 
     // Eğer giriş yapılmamışsa (Login sayfasındaysak)
     if (page.url().includes("ServiceLogin") || page.url().includes("identifier")) {
-        console.log("[i] Oturum kapalı. Giriş yapılıyor...");
+        console.log("[i] Google Oturumu kapalı. Giriş yapılıyor...");
         
         try {
             // Email
@@ -77,17 +100,16 @@ async function ensureGoogleLogin(page) {
             await randomDelay(1000, 2000);
             await humanClick(page, page.locator('#passwordNext'));
             
-            // Başarılı giriş sonrası yönlendirmeyi bekle
-            console.log("[i] Giriş bilgileri gönderildi. Profilin yüklenmesi bekleniyor...");
-            await page.waitForURL("**/myaccount.google.com/**", { timeout: 60000 });
+            console.log("[i] Giriş bilgileri gönderildi. Yönlendirme bekleniyor...");
+            // Login sonrası herhangi bir Google sayfasına (veya yönlendiği yere) ulaşmasını bekle
+            await page.waitForFunction(() => !window.location.href.includes('signin/v2'), { timeout: 60000 });
             console.log("[✓] Google girişi başarılı.");
         } catch (error) {
             console.log("[!] Otomatik giriş başarısız veya 2FA gerekli. Lütfen manuel müdahale edin.");
-            // Eğer manuel müdahale gerekirse kullanıcının myaccount sayfasına ulaşmasını bekleyelim
-            await page.waitForURL("**/myaccount.google.com/**", { timeout: 300000 });
+            await page.waitForTimeout(10000); // Kullanıcıya bakması için süre ver
         }
     } else {
-        console.log("[✓] Zaten giriş yapılmış, direkt raporlara geçiliyor.");
+        console.log("[✓] Zaten giriş yapılmış.");
     }
 }
 
@@ -100,6 +122,12 @@ async function exportSinglePage(page, url) {
     try {
         await page.goto(url, { waitUntil: 'domcontentloaded' });
         await randomDelay(3000, 5000);
+
+        // Eğer hala giriş ekranına atarsa (Login warmup işe yaramadıysa)
+        if (page.url().includes("accounts.google.com")) {
+            console.log("[!] Rapor sayfası girişe yönlendirdi. Warmup yetersiz kalmış olabilir.");
+            return;
+        }
 
         console.log("[i] Tablonun yüklenmesi bekleniyor...");
         await expect(page.getByText(/pandora_vendor_name_area|Vendor Name|Satıcı Adı/i).first()).toBeVisible({ timeout: 60000 });
@@ -158,27 +186,31 @@ async function exportAllReports(headless = false) {
         return;
     }
 
+    // Cihaz ayarları (Mobil veya Masaüstü)
+    const deviceProfile = USE_MOBILE ? devices['Pixel 5'] : {};
+    
     const winUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
     const macUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
-    const selectedUA = process.platform === 'win32' ? winUA : macUA;
-    const selectedPlatform = process.platform === 'win32' ? 'Win32' : 'MacIntel';
+    const selectedUA = USE_MOBILE ? deviceProfile.userAgent : (process.platform === 'win32' ? winUA : macUA);
+    const selectedPlatform = USE_MOBILE ? deviceProfile.platform : (process.platform === 'win32' ? 'Win32' : 'MacIntel');
 
     const context = await chromium.launchPersistentContext(USER_DATA_DIR, {
+        ...deviceProfile,
         headless: headless,
         slowMo: SLOW_MO,
         channel: 'chrome',
         acceptDownloads: true,
-        viewport: VIEWPORT,
+        viewport: USE_MOBILE ? deviceProfile.viewport : VIEWPORT,
         userAgent: selectedUA,
-        ignoreDefaultArgs: ['--enable-automation'], // Bu satır 'Controlled by...' yazısını ve bayrağını kaldırır
+        ignoreDefaultArgs: ['--enable-automation'],
         args: [
             "--disable-blink-features=AutomationControlled",
             "--no-sandbox",
             "--disable-setuid-sandbox",
             "--disable-web-security",
             "--disable-features=IsolateOrigins,site-per-process",
-            "--disable-infobars", // Bazı sürümlerde infobar'ı gizler
-            `--window-size=${VIEWPORT.width},${VIEWPORT.height}`
+            "--disable-infobars",
+            `--window-size=${USE_MOBILE ? deviceProfile.viewport.width : VIEWPORT.width},${USE_MOBILE ? deviceProfile.viewport.height : VIEWPORT.height}`
         ],
     });
 
@@ -197,11 +229,11 @@ async function exportAllReports(headless = false) {
     }, selectedPlatform);
 
     try {
-        // 1) Warmup: Önce ana Google sayfası üzerinden girişi garanti altına al
+        // 1) Warmup: Side-door (Neutral) sayfa üzerinden giriş
         await ensureGoogleLogin(page);
         await randomDelay(2000, 4000);
 
-        // 2) Raporları sırayla işle
+        // 2) Raporları işle
         for (const url of REPORT_URLS) {
             await exportSinglePage(page, url);
         }
