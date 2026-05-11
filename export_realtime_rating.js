@@ -140,21 +140,46 @@ async function exportAllReports(headless = false) {
 
     console.log(`[i] Toplam ${REPORT_URLS.length} rapor işlenecek.`);
     
+    // Windows ve Mac için uygun User-Agent seçimi
+    const winUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+    const macUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+    const selectedUA = process.platform === 'win32' ? winUA : macUA;
+
     const context = await chromium.launchPersistentContext(USER_DATA_DIR, {
         headless: headless,
         slowMo: SLOW_MO,
+        channel: 'chrome', // Gerçek Google Chrome'u kullanmayı dener (daha güvenli)
         acceptDownloads: true,
         viewport: VIEWPORT,
-        userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        userAgent: selectedUA,
         args: [
             "--disable-blink-features=AutomationControlled",
             "--no-sandbox",
-            "--disable-setuid-sandbox"
+            "--disable-setuid-sandbox",
+            "--disable-web-security",
+            "--disable-features=IsolateOrigins,site-per-process"
         ],
     });
 
     const page = await context.newPage();
     page.setDefaultTimeout(TIMEOUT);
+
+    // Deep Stealth: Sayfa yüklenmeden önce bot göstergelerini temizle
+    await page.addInitScript(() => {
+        // navigator.webdriver'ı tamamen sil
+        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+        
+        // Chrome özelliklerini taklit et
+        window.chrome = { runtime: {} };
+        
+        // Eklenti listesini taklit et
+        Object.defineProperty(navigator, 'plugins', {
+            get: () => [1, 2, 3, 4, 5],
+        });
+        
+        // Dilleri ve donanımı sabitle
+        Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+    });
 
     try {
         for (const url of REPORT_URLS) {
