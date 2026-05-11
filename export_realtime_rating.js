@@ -4,6 +4,7 @@ import { expect } from '@playwright/test';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
+import 'dotenv/config';
 
 // Stealth pluginini aktif et
 chromium.use(stealthPlugin());
@@ -11,13 +12,13 @@ chromium.use(stealthPlugin());
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const REPORT_URL = "https://datastudio.google.com/u/0/reporting/ac9c2e68-bd1f-4f3c-82aa-21cdc8fe50b5/page/p_6agkl7j1md?s=nICzxp495F4";
-const USER_DATA_DIR = path.join(__dirname, 'auth_state');
-const DOWNLOAD_DIR = path.join(__dirname, 'downloads');
-
-// Credentials
-const EMAIL = "channelinfoc@gmail.com";
-const PASSWORD = "i57sqUi15jkq5uvV";
+// Configuration from .env
+const REPORT_URL = process.env.REPORT_URL;
+const USER_DATA_DIR = path.join(__dirname, process.env.AUTH_STATE_DIR || 'auth_state');
+const DOWNLOAD_DIR = path.join(__dirname, process.env.DOWNLOAD_DIR || 'downloads');
+const EMAIL = process.env.GOOGLE_EMAIL;
+const PASSWORD = process.env.GOOGLE_PASSWORD;
+const IS_HEADLESS = process.env.HEADLESS === 'true';
 
 // Yardımcı: Rastgele bekleme (insan taklidi için)
 const randomDelay = (min = 500, max = 2000) => 
@@ -142,8 +143,8 @@ async function exportRealtimeRatingCsv(headless = false) {
     }
 }
 
-// headless=false olduğunda tarayıcı görünür ve gerekirse Google girişi yapılabilir
-exportRealtimeRatingCsv(false).catch((err) => {
+// .env dosyasındaki HEADLESS değerine göre başlatır
+exportRealtimeRatingCsv(IS_HEADLESS).catch((err) => {
     console.error("Script durduruldu.");
     process.exit(1);
 });

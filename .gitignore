@@ -3,3 +3,4 @@ auth_state/
 downloads/
 .DS_Store
 package-lock.json
+.env
