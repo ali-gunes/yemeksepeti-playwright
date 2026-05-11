@@ -26,9 +26,31 @@ const VIEWPORT = {
     height: parseInt(process.env.VIEWPORT_HEIGHT) || 900 
 };
 
-// Yardımcı: Rastgele bekleme (insan taklidi için)
+// Yardımcı: Rastgele bekleme
 const randomDelay = (min = 500, max = 2000) => 
     new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * (max - min + 1) + min)));
+
+/**
+ * İnsan benzeri tıklama simülasyonu
+ */
+async function humanClick(page, locator) {
+    const element = await locator.first();
+    const box = await element.boundingBox();
+    if (!box) {
+        await element.click();
+        return;
+    }
+
+    // Fareyi butonun üzerine rastgele bir noktaya hareket ettir
+    const x = box.x + box.width * (0.2 + Math.random() * 0.6);
+    const y = box.y + box.height * (0.2 + Math.random() * 0.6);
+    
+    await page.mouse.move(x, y, { steps: 10 + Math.floor(Math.random() * 10) });
+    await randomDelay(100, 300);
+    await page.mouse.down();
+    await randomDelay(50, 150);
+    await page.mouse.up();
+}
 
 /**
  * Tek bir Looker Studio sayfasını dışa aktarır.
@@ -37,75 +59,64 @@ async function exportSinglePage(page, url) {
     console.log(`\n[i] İşleniyor: ${url}`);
     
     try {
-        // 1) Sayfaya git
         await page.goto(url, { waitUntil: 'domcontentloaded' });
-        await randomDelay(2000, 4000);
+        await randomDelay(3000, 5000);
 
-        // Eğer Google login ekranı çıkarsa otomatik giriş yapmayı dene
         if (page.url().includes("accounts.google.com")) {
             console.log("[i] Google girişi gerekli. Otomatik giriş yapılıyor...");
             
             try {
-                await page.locator('input[type="email"]').pressSequentially(EMAIL, { delay: 100 });
-                await randomDelay(800, 1500);
-                await page.click('#identifierNext');
+                const emailInput = page.locator('input[type="email"]');
+                await emailInput.pressSequentially(EMAIL, { delay: 100 + Math.random() * 100 });
+                await randomDelay(1000, 2000);
+                await humanClick(page, page.locator('#identifierNext'));
                 
                 await page.waitForSelector('input[type="password"]', { state: 'visible', timeout: 30000 });
-                await randomDelay(1000, 2000);
+                await randomDelay(1500, 3000);
                 
-                await page.locator('input[type="password"]').pressSequentially(PASSWORD, { delay: 100 });
-                await randomDelay(800, 1500);
-                await page.click('#passwordNext');
+                const passInput = page.locator('input[type="password"]');
+                await passInput.pressSequentially(PASSWORD, { delay: 100 + Math.random() * 100 });
+                await randomDelay(1000, 2000);
+                await humanClick(page, page.locator('#passwordNext'));
                 
                 console.log("[i] Giriş bilgileri gönderildi. Yönlendirme bekleniyor...");
             } catch (loginError) {
-                console.log("[!] Otomatik giriş hatası (manuel müdahale gerekebilir): " + loginError.message);
+                console.log("[!] Otomatik giriş hatası: " + loginError.message);
             }
 
             await page.waitForURL("**/datastudio.google.com/**", { timeout: 300000 });
-            // Giriş sonrası sayfanın tam yüklenmesi için tekrar bekle
             await page.goto(url, { waitUntil: 'domcontentloaded' });
         }
 
-        // 2) Tablonun yüklenmesini bekle
         console.log("[i] Tablonun yüklenmesi bekleniyor...");
-        // Sayfada hem Vendor Name hem de pandora_vendor_name_area olabilir, herhangi birini bekleyelim
         await expect(page.getByText(/pandora_vendor_name_area|Vendor Name|Satıcı Adı/i).first()).toBeVisible({ timeout: 60000 });
         await randomDelay(2000, 4000);
 
-        // 3) Tabloya sağ tıkla
         console.log("[i] Tabloya sağ tıklanıyor...");
-        // .last() kullanarak sayfanın üstündeki grafikler yerine alttaki tabloyu hedefliyoruz
         const tableCell = page.getByText(/pandora_vendor_name_area|Vendor Name|Arby's/i).last();
         await tableCell.scrollIntoViewIfNeeded();
         await randomDelay(1000, 2000);
         
-        await tableCell.click();
-        await randomDelay(500, 1000);
         await tableCell.click({ button: 'right' });
 
-        // 4) Menüden dışa aktarma adımları
         await randomDelay(1500, 2500);
         console.log("[i] 'Export Chart / Grafiği dışa aktar' menüsüne tıklanıyor...");
-        await page.getByText(/Grafiği dışa aktar|Export chart|Export graph/i).first().click();
+        await humanClick(page, page.getByText(/Grafiği dışa aktar|Export chart|Export graph/i).first());
 
         await randomDelay(1000, 2000);
         console.log("[i] 'Export data / Verileri dışa aktar' seçeneğine tıklanıyor...");
-        await page.getByText(/Verileri dışa aktar|Export data/i).first().click();
+        await humanClick(page, page.getByText(/Verileri dışa aktar|Export data/i).first());
 
         await randomDelay(1000, 2000);
         console.log("[i] 'CSV (Excel)' seçeneği işaretleniyor...");
-        await page.getByText(/CSV \(Excel\)/i).first().click();
+        await humanClick(page, page.getByText(/CSV \(Excel\)/i).first());
 
-        // 5) İndirmeyi başlat ve yakala
         await randomDelay(1000, 2000);
         console.log("[i] 'Export / Dışa aktar' butonuna tıklanıyor ve indirme bekleniyor...");
         const downloadPromise = page.waitForEvent('download', { timeout: 120000 });
-        await page.getByRole('button', { name: /Dışa aktar|Export/i }).click();
+        await humanClick(page, page.getByRole('button', { name: /Dışa aktar|Export/i }));
 
         const download = await downloadPromise;
-        
-        // YYYY-MM-DD_HH-mm-ss formatında zaman damgası oluştur
         const now = new Date();
         const timestamp = now.toISOString().split('T')[0] + '_' + 
                           now.getHours().toString().padStart(2, '0') + '-' + 
@@ -126,9 +137,6 @@ async function exportSinglePage(page, url) {
     }
 }
 
-/**
- * Tüm raporları sırayla dışa aktarır.
- */
 async function exportAllReports(headless = false) {
     if (!fs.existsSync(USER_DATA_DIR)) fs.mkdirSync(USER_DATA_DIR, { recursive: true });
     if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
@@ -138,17 +146,15 @@ async function exportAllReports(headless = false) {
         return;
     }
 
-    console.log(`[i] Toplam ${REPORT_URLS.length} rapor işlenecek.`);
-    
-    // Windows ve Mac için uygun User-Agent seçimi
     const winUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
     const macUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
     const selectedUA = process.platform === 'win32' ? winUA : macUA;
+    const selectedPlatform = process.platform === 'win32' ? 'Win32' : 'MacIntel';
 
     const context = await chromium.launchPersistentContext(USER_DATA_DIR, {
         headless: headless,
         slowMo: SLOW_MO,
-        channel: 'chrome', // Gerçek Google Chrome'u kullanmayı dener (daha güvenli)
+        channel: 'chrome',
         acceptDownloads: true,
         viewport: VIEWPORT,
         userAgent: selectedUA,
@@ -157,29 +163,31 @@ async function exportAllReports(headless = false) {
             "--no-sandbox",
             "--disable-setuid-sandbox",
             "--disable-web-security",
-            "--disable-features=IsolateOrigins,site-per-process"
+            "--disable-features=IsolateOrigins,site-per-process",
+            `--window-size=${VIEWPORT.width},${VIEWPORT.height}`
         ],
     });
 
     const page = await context.newPage();
     page.setDefaultTimeout(TIMEOUT);
 
-    // Deep Stealth: Sayfa yüklenmeden önce bot göstergelerini temizle
-    await page.addInitScript(() => {
-        // navigator.webdriver'ı tamamen sil
+    // Ultimate Stealth: Fingerprint Tutarlılığı
+    await page.addInitScript((platform) => {
+        // WebDriver'ı gizle
         Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
         
-        // Chrome özelliklerini taklit et
-        window.chrome = { runtime: {} };
-        
-        // Eklenti listesini taklit et
-        Object.defineProperty(navigator, 'plugins', {
-            get: () => [1, 2, 3, 4, 5],
-        });
-        
-        // Dilleri ve donanımı sabitle
+        // Donanım ve Platform tutarlılığı
+        Object.defineProperty(navigator, 'platform', { get: () => platform });
         Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-    });
+        Object.defineProperty(navigator, 'vendor', { get: () => 'Google Inc.' });
+        
+        // Pencere boyutları tutarlılığı (botlar genellikle 0 veya eşit döner)
+        window.outerWidth = window.innerWidth + 16;
+        window.outerHeight = window.innerHeight + 80;
+
+        // Chrome Runtime emülasyonu
+        window.chrome = { runtime: {} };
+    }, selectedPlatform);
 
     try {
         for (const url of REPORT_URLS) {
@@ -191,7 +199,6 @@ async function exportAllReports(headless = false) {
     }
 }
 
-// .env dosyasındaki HEADLESS değerine göre başlatır
 exportAllReports(IS_HEADLESS).catch((err) => {
     console.error("Script durduruldu.");
     process.exit(1);
