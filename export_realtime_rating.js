@@ -170,12 +170,14 @@ async function exportAllReports(headless = false) {
         acceptDownloads: true,
         viewport: VIEWPORT,
         userAgent: selectedUA,
+        ignoreDefaultArgs: ['--enable-automation'], // Bu satır 'Controlled by...' yazısını ve bayrağını kaldırır
         args: [
             "--disable-blink-features=AutomationControlled",
             "--no-sandbox",
             "--disable-setuid-sandbox",
             "--disable-web-security",
             "--disable-features=IsolateOrigins,site-per-process",
+            "--disable-infobars", // Bazı sürümlerde infobar'ı gizler
             `--window-size=${VIEWPORT.width},${VIEWPORT.height}`
         ],
     });
