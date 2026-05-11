@@ -19,6 +19,12 @@ const DOWNLOAD_DIR = path.join(__dirname, process.env.DOWNLOAD_DIR || 'downloads
 const EMAIL = process.env.GOOGLE_EMAIL;
 const PASSWORD = process.env.GOOGLE_PASSWORD;
 const IS_HEADLESS = process.env.HEADLESS === 'true';
+const SLOW_MO = parseInt(process.env.SLOW_MO) || 0;
+const TIMEOUT = parseInt(process.env.DEFAULT_TIMEOUT) || 60000;
+const VIEWPORT = { 
+    width: parseInt(process.env.VIEWPORT_WIDTH) || 1568, 
+    height: parseInt(process.env.VIEWPORT_HEIGHT) || 900 
+};
 
 // Yardımcı: Rastgele bekleme (insan taklidi için)
 const randomDelay = (min = 500, max = 2000) => 
@@ -35,8 +41,9 @@ async function exportRealtimeRatingCsv(headless = false) {
     console.log("[i] Tarayıcı başlatılıyor (Stealth mode aktif)...");
     const context = await chromium.launchPersistentContext(USER_DATA_DIR, {
         headless: headless,
+        slowMo: SLOW_MO,
         acceptDownloads: true,
-        viewport: { width: 1568, height: 900 },
+        viewport: VIEWPORT,
         userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         args: [
             "--disable-blink-features=AutomationControlled",
@@ -46,7 +53,7 @@ async function exportRealtimeRatingCsv(headless = false) {
     });
 
     const page = await context.newPage();
-    page.setDefaultTimeout(60000);
+    page.setDefaultTimeout(TIMEOUT);
 
     try {
         // 1) Rapora git
@@ -129,8 +136,11 @@ async function exportRealtimeRatingCsv(headless = false) {
         await page.getByRole('button', { name: /Dışa aktar|Export/i }).click();
 
         const download = await downloadPromise;
+        const datePrefix = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
         const suggestedName = download.suggestedFilename() || "real_time_rating.csv";
-        const targetPath = path.join(DOWNLOAD_DIR, suggestedName);
+        const finalName = `${datePrefix}_${suggestedName}`;
+        
+        const targetPath = path.join(DOWNLOAD_DIR, finalName);
         await download.saveAs(targetPath);
         
         console.log(`[✓] İndirilen dosya: ${targetPath}`);
