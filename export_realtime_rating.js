@@ -40,11 +40,8 @@ async function humanClick(page, locator) {
         await element.click();
         return;
     }
-
-    // Fareyi butonun üzerine rastgele bir noktaya hareket ettir
     const x = box.x + box.width * (0.2 + Math.random() * 0.6);
     const y = box.y + box.height * (0.2 + Math.random() * 0.6);
-    
     await page.mouse.move(x, y, { steps: 10 + Math.floor(Math.random() * 10) });
     await randomDelay(100, 300);
     await page.mouse.down();
@@ -53,40 +50,56 @@ async function humanClick(page, locator) {
 }
 
 /**
+ * Google'a en güvenli şekilde (Ana sayfa üzerinden) giriş yapar.
+ */
+async function ensureGoogleLogin(page) {
+    console.log("[i] Giriş durumu kontrol ediliyor (Ana Google sayfası)...");
+    await page.goto("https://accounts.google.com/", { waitUntil: 'networkidle' });
+    await randomDelay(1000, 2000);
+
+    // Eğer giriş yapılmamışsa (Login sayfasındaysak)
+    if (page.url().includes("ServiceLogin") || page.url().includes("identifier")) {
+        console.log("[i] Oturum kapalı. Giriş yapılıyor...");
+        
+        try {
+            // Email
+            const emailInput = page.locator('input[type="email"]');
+            await emailInput.pressSequentially(EMAIL, { delay: 100 + Math.random() * 100 });
+            await randomDelay(800, 1500);
+            await humanClick(page, page.locator('#identifierNext'));
+            
+            // Password
+            await page.waitForSelector('input[type="password"]', { state: 'visible', timeout: 30000 });
+            await randomDelay(1500, 2500);
+            
+            const passInput = page.locator('input[type="password"]');
+            await passInput.pressSequentially(PASSWORD, { delay: 100 + Math.random() * 100 });
+            await randomDelay(1000, 2000);
+            await humanClick(page, page.locator('#passwordNext'));
+            
+            // Başarılı giriş sonrası yönlendirmeyi bekle
+            console.log("[i] Giriş bilgileri gönderildi. Profilin yüklenmesi bekleniyor...");
+            await page.waitForURL("**/myaccount.google.com/**", { timeout: 60000 });
+            console.log("[✓] Google girişi başarılı.");
+        } catch (error) {
+            console.log("[!] Otomatik giriş başarısız veya 2FA gerekli. Lütfen manuel müdahale edin.");
+            // Eğer manuel müdahale gerekirse kullanıcının myaccount sayfasına ulaşmasını bekleyelim
+            await page.waitForURL("**/myaccount.google.com/**", { timeout: 300000 });
+        }
+    } else {
+        console.log("[✓] Zaten giriş yapılmış, direkt raporlara geçiliyor.");
+    }
+}
+
+/**
  * Tek bir Looker Studio sayfasını dışa aktarır.
  */
 async function exportSinglePage(page, url) {
-    console.log(`\n[i] İşleniyor: ${url}`);
+    console.log(`\n[i] Rapor açılıyor: ${url}`);
     
     try {
         await page.goto(url, { waitUntil: 'domcontentloaded' });
         await randomDelay(3000, 5000);
-
-        if (page.url().includes("accounts.google.com")) {
-            console.log("[i] Google girişi gerekli. Otomatik giriş yapılıyor...");
-            
-            try {
-                const emailInput = page.locator('input[type="email"]');
-                await emailInput.pressSequentially(EMAIL, { delay: 100 + Math.random() * 100 });
-                await randomDelay(1000, 2000);
-                await humanClick(page, page.locator('#identifierNext'));
-                
-                await page.waitForSelector('input[type="password"]', { state: 'visible', timeout: 30000 });
-                await randomDelay(1500, 3000);
-                
-                const passInput = page.locator('input[type="password"]');
-                await passInput.pressSequentially(PASSWORD, { delay: 100 + Math.random() * 100 });
-                await randomDelay(1000, 2000);
-                await humanClick(page, page.locator('#passwordNext'));
-                
-                console.log("[i] Giriş bilgileri gönderildi. Yönlendirme bekleniyor...");
-            } catch (loginError) {
-                console.log("[!] Otomatik giriş hatası: " + loginError.message);
-            }
-
-            await page.waitForURL("**/datastudio.google.com/**", { timeout: 300000 });
-            await page.goto(url, { waitUntil: 'domcontentloaded' });
-        }
 
         console.log("[i] Tablonun yüklenmesi bekleniyor...");
         await expect(page.getByText(/pandora_vendor_name_area|Vendor Name|Satıcı Adı/i).first()).toBeVisible({ timeout: 60000 });
@@ -100,11 +113,11 @@ async function exportSinglePage(page, url) {
         await tableCell.click({ button: 'right' });
 
         await randomDelay(1500, 2500);
-        console.log("[i] 'Export Chart / Grafiği dışa aktar' menüsüne tıklanıyor...");
+        console.log("[i] 'Export Chart' menüsüne tıklanıyor...");
         await humanClick(page, page.getByText(/Grafiği dışa aktar|Export chart|Export graph/i).first());
 
         await randomDelay(1000, 2000);
-        console.log("[i] 'Export data / Verileri dışa aktar' seçeneğine tıklanıyor...");
+        console.log("[i] 'Export data' seçeneğine tıklanıyor...");
         await humanClick(page, page.getByText(/Verileri dışa aktar|Export data/i).first());
 
         await randomDelay(1000, 2000);
@@ -112,7 +125,7 @@ async function exportSinglePage(page, url) {
         await humanClick(page, page.getByText(/CSV \(Excel\)/i).first());
 
         await randomDelay(1000, 2000);
-        console.log("[i] 'Export / Dışa aktar' butonuna tıklanıyor ve indirme bekleniyor...");
+        console.log("[i] 'Export' butonuna tıklanıyor ve indirme bekleniyor...");
         const downloadPromise = page.waitForEvent('download', { timeout: 120000 });
         await humanClick(page, page.getByRole('button', { name: /Dışa aktar|Export/i }));
 
@@ -125,7 +138,6 @@ async function exportSinglePage(page, url) {
                           
         const suggestedName = download.suggestedFilename() || "export.csv";
         const finalName = `${timestamp}_${suggestedName}`;
-        
         const targetPath = path.join(DOWNLOAD_DIR, finalName);
         await download.saveAs(targetPath);
         
@@ -173,23 +185,21 @@ async function exportAllReports(headless = false) {
 
     // Ultimate Stealth: Fingerprint Tutarlılığı
     await page.addInitScript((platform) => {
-        // WebDriver'ı gizle
         Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-        
-        // Donanım ve Platform tutarlılığı
         Object.defineProperty(navigator, 'platform', { get: () => platform });
         Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
         Object.defineProperty(navigator, 'vendor', { get: () => 'Google Inc.' });
-        
-        // Pencere boyutları tutarlılığı (botlar genellikle 0 veya eşit döner)
         window.outerWidth = window.innerWidth + 16;
         window.outerHeight = window.innerHeight + 80;
-
-        // Chrome Runtime emülasyonu
         window.chrome = { runtime: {} };
     }, selectedPlatform);
 
     try {
+        // 1) Warmup: Önce ana Google sayfası üzerinden girişi garanti altına al
+        await ensureGoogleLogin(page);
+        await randomDelay(2000, 4000);
+
+        // 2) Raporları sırayla işle
         for (const url of REPORT_URLS) {
             await exportSinglePage(page, url);
         }
