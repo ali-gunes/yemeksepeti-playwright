@@ -104,9 +104,16 @@ async function exportSinglePage(page, url) {
         await page.getByRole('button', { name: /Dışa aktar|Export/i }).click();
 
         const download = await downloadPromise;
-        const datePrefix = new Date().toISOString().split('T')[0];
+        
+        // YYYY-MM-DD_HH-mm-ss formatında zaman damgası oluştur
+        const now = new Date();
+        const timestamp = now.toISOString().split('T')[0] + '_' + 
+                          now.getHours().toString().padStart(2, '0') + '-' + 
+                          now.getMinutes().toString().padStart(2, '0') + '-' + 
+                          now.getSeconds().toString().padStart(2, '0');
+                          
         const suggestedName = download.suggestedFilename() || "export.csv";
-        const finalName = `${datePrefix}_${suggestedName}`;
+        const finalName = `${timestamp}_${suggestedName}`;
         
         const targetPath = path.join(DOWNLOAD_DIR, finalName);
         await download.saveAs(targetPath);
